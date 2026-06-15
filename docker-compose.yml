@@ -1,5 +1,8 @@
 services:
+  # ── SQLite mode (default) ─────────────────────────────────────────────────────
+  # Just the app, data in a named volume. Set AUTH_TOKEN.
   sync:
+    &app
     build: .
     image: nodepad-sync-server
     container_name: nodepad-sync
@@ -14,6 +17,47 @@ services:
       DB_TYPE: "sqlite"
     volumes:
       - nodepad-data:/app/data
+    profiles:
+      - sqlite
+      - default
+
+  # ── Postgres mode ──────────────────────────────────────────────────────────────
+  # Spins up a PostgreSQL 17 instance. You can also point at an existing one by
+  # commenting out this service and setting DB_URL in the environment instead.
+  # Activate with: docker compose --profile pg up -d
+  sync-pg:
+    <<: *app
+    container_name: nodepad-sync-pg
+    environment:
+      PORT: "3001"
+      MCP_PORT: "3100"
+      AUTH_TOKEN: "changeme"
+      DB_TYPE: "postgres"
+      DB_URL: "postgresql://nodepad:***@pg:5432/nodepad"
+    depends_on:
+      pg:
+        condition: service_healthy
+    profiles:
+      - pg
+
+  pg:
+    image: postgres:17-alpine
+    container_name: nodepad-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nodepad
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: nodepad
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nodepad"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - pg
 
 volumes:
   nodepad-data:
+  pg-data:
