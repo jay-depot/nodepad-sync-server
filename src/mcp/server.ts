@@ -1,10 +1,13 @@
 // ── MCP Server ─────────────────────────────────────────────────────────────────
-// Exposes nodepad data via the Model Context Protocol (stdio transport).
-// Tools: search, CRUD for blocks/projects, graph traversal, synthesis.
+// Exposes nodepad data via the Model Context Protocol.
+// Supports two transports:
+//   stdio  — default, for gateway/CLI integration
+//   HTTP   — SSE + POST, for network access (--mcp-port)
 
 import { createInterface } from "readline"
+import { createServer, IncomingMessage, ServerResponse } from "http"
 import type { Storage } from "../storage/index.js"
-import type { Project, Block, Edge, SubTask, GhostNote, SearchResult, GraphData } from "../types.js"
+import type { Project, Block, SearchResult } from "../types.js"
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -194,9 +197,19 @@ export class McpServer {
     },
   ]
 
-  constructor(private storage: Storage) {}
+  private authToken: string
+  private sseClients = new Set<(msg: string) => void>()
 
-  async start(): Promise<void> {
+  constructor(
+    private storage: Storage,
+    authToken?: string,
+  ) {
+    this.authToken = authToken || process.env.AUTH_TOKEN || "nodepad-sync-dev"
+  }
+
+  // ── stdio transport ────────────────────────────────────────────────────────
+
+  async startStdio(): Promise<void> {
     const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false })
 
     rl.on("line", async (line) => {
@@ -204,21 +217,118 @@ export class McpServer {
         const req: McpRequest = JSON.parse(line)
         const response = await this.handleRequest(req)
         process.stdout.write(JSON.stringify(response) + "\n")
-      } catch (err) {
+      } catch {
         // Ignore malformed JSON
       }
     })
 
-    // Send initialize notification
     this.sendNotification("initialized", { tools: this.tools })
   }
 
+  // ── HTTP transport (SSE + POST) ────────────────────────────────────────────
+
+  async startHttp(port: number): Promise<void> {
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      this.handleHttp(req, res)
+    })
+
+    return new Promise((resolve) => {
+      server.listen(port, "0.0.0.0", () => {
+        console.error(`MCP HTTP server listening on port ${port}`)
+        resolve()
+      })
+    })
+  }
+
+  private handleHttp(req: IncomingMessage, res: ServerResponse): void {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`)
+
+    // Auth check on all routes
+    const token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "")
+      || url.searchParams.get("token") || ""
+    if (token !== this.authToken) {
+      res.writeHead(401, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ error: "Unauthorized" }))
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/mcp") {
+      // SSE stream — responses and notifications
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      })
+
+      const send = (msg: string) => {
+        res.write(`data: ${msg}\n\n`)
+      }
+
+      this.sseClients.add(send)
+
+      // Send initialized notification
+      send(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "initialized",
+        params: { tools: this.tools },
+      }))
+
+      req.on("close", () => {
+        this.sseClients.delete(send)
+      })
+
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/mcp") {
+      // JSON-RPC request
+      let body = ""
+      req.on("data", (chunk) => (body += chunk))
+      req.on("end", async () => {
+        try {
+          const mcpReq: McpRequest = JSON.parse(body)
+          const response = await this.handleRequest(mcpReq)
+
+          // Send response via SSE
+          for (const send of this.sseClients) {
+            send(JSON.stringify(response))
+          }
+
+          // Also respond directly for clients that don't use SSE
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          })
+          res.end(JSON.stringify(response))
+        } catch (err: any) {
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32700, message: "Parse error" },
+          }))
+        }
+      })
+      return
+    }
+
+    // Health check
+    if (req.method === "GET" && url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+
+    res.writeHead(404)
+    res.end()
+  }
+
+  // ── Core request handler ───────────────────────────────────────────────────
+
   private sendNotification(method: string, params: any): void {
-    process.stdout.write(JSON.stringify({
-      jsonrpc: "2.0",
-      method,
-      params,
-    }) + "\n")
+    const msg = JSON.stringify({ jsonrpc: "2.0", method, params })
+    process.stdout.write(msg + "\n")
   }
 
   private async handleRequest(req: McpRequest): Promise<McpResponse> {
