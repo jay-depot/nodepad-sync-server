@@ -8,6 +8,7 @@ import { createInterface } from "readline"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import type { Storage } from "../storage/index.js"
 import type { Project, Block, SearchResult } from "../types.js"
+import { embedText, cosineSimilarity } from "../embeddings/ollama.js"
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -126,15 +127,16 @@ export class McpServer {
     },
     {
       name: "search_blocks",
-      description: "Full-text search across blocks. Returns blocks ranked by relevance.",
+      description: "Search across blocks. Supports full-text (FTS5/tsvector) and vector similarity search.",
       inputSchema: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Search query" },
+          query: { type: "string", description: "Search query (required for text mode; optional for vector mode)" },
           projectId: { type: "string", description: "Optional: filter by project" },
           limit: { type: "number", description: "Max results (default: 20)" },
+          mode: { type: "string", description: "Search mode: 'text' (full-text) or 'vector' (semantic similarity)", enum: ["text", "vector"] },
         },
-        required: ["query"],
+        required: [],
       },
     },
     {
@@ -169,6 +171,16 @@ export class McpServer {
           projectId: { type: "string", description: "Project ID" },
         },
         required: ["projectId"],
+      },
+    },
+    {
+      name: "reindex_embeddings",
+      description: "Re-generate embeddings for all blocks in a project (or all projects). Use after changing the embedding model.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Optional: only reindex this project" },
+        },
       },
     },
     {
@@ -422,12 +434,33 @@ export class McpServer {
       }
 
       case "search_blocks": {
+        const mode = (args.mode as string) || "text"
+        const projectId = args.projectId as string | undefined
+        const limit = (args.limit as number) || 20
+
+        if (mode === "vector") {
+          const query = (args.query as string) || ""
+          if (!query.trim()) {
+            return this.err(id, -32602, "query is required for vector search")
+          }
+          const { embedding } = await embedText(query)
+          const results = await this.storage.vectorSearch(embedding, projectId, limit)
+          return this.ok(id, { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] })
+        }
+
         const results = await this.storage.searchBlocks(
           args.query as string,
-          args.projectId as string | undefined,
-          (args.limit as number) || 20,
+          projectId,
+          limit,
         )
         return this.ok(id, { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] })
+      }
+
+      case "reindex_embeddings": {
+        const projectId = args.projectId as string | undefined
+        // Kick off async reindex — don't wait
+        this.reindexAllEmbeddings(projectId)
+        return this.ok(id, { content: [{ type: "text", text: "Reindex started in background" }] })
       }
 
       case "get_graph": {
@@ -467,5 +500,46 @@ export class McpServer {
 
   private err(id: number | string | null, code: number, message: string, data?: JsonValue): McpResponse {
     return { jsonrpc: "2.0", id, error: { code, message, data } }
+  }
+
+  /** Re-generate embeddings for all blocks that lack them (or all blocks if forced). */
+  private async reindexAllEmbeddings(projectId?: string): Promise<void> {
+    try {
+      const projects = projectId
+        ? [await this.storage.getProject(projectId)].filter(Boolean) as Project[]
+        : await this.storage.listProjects()
+
+      for (const project of projects) {
+        const blocks = await this.storage.getBlocks(project.id)
+        const batch: { block: Block; text: string }[] = []
+
+        for (const block of blocks) {
+          if (!block.text.trim()) continue
+          const existing = await this.storage.getEmbedding(block.id)
+          if (existing) continue // skip if already embedded
+          batch.push({ block, text: block.text })
+        }
+
+        if (batch.length === 0) {
+          console.log(`[reindex] ${project.name}: all ${blocks.length} blocks already embedded`)
+          continue
+        }
+
+        console.log(`[reindex] ${project.name}: generating ${batch.length}/${blocks.length} embeddings…`)
+
+        const texts = batch.map(b => b.text)
+        const results = await embedBatch(texts)
+
+        for (let i = 0; i < results.length; i++) {
+          await this.storage.setEmbedding(batch[i].block.id, results[i].model, results[i].embedding)
+        }
+
+        console.log(`[reindex] ${project.name}: done (${results.length} embeddings stored)`)
+      }
+
+      console.log("[reindex] complete")
+    } catch (err) {
+      console.error("[reindex] error:", err)
+    }
   }
 }

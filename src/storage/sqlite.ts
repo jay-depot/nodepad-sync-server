@@ -8,6 +8,7 @@ import type {
   SyncSnapshot, SearchResult, GraphData,
 } from "../types.js"
 import type { Storage } from "./index.js"
+import { embedText, embedBatch, cosineSimilarity } from "../embeddings/ollama.js"
 
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "data", "nodepad.db")
 
@@ -72,6 +73,14 @@ export class SqliteStorage implements Storage {
 
       CREATE INDEX IF NOT EXISTS idx_ghost_project ON ghost_notes(project_id);
 
+      -- Embeddings stored as JSON arrays (TEXT) for JS-side cosine similarity
+      CREATE TABLE IF NOT EXISTS block_embeddings (
+        block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
+        embedding TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT 'nomic-embed-text',
+        updated_at INTEGER NOT NULL
+      );
+
       -- FTS5 for full-text search
       CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
         text, category, annotation,
@@ -97,18 +106,7 @@ export class SqliteStorage implements Storage {
       END;
     `)
 
-    // Try to load sqlite-vec for vector search
-    try {
-      this.db.loadExtension("vec0")
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS blocks_vec USING vec0(
-          embedding float[768] distance_metric=cosine
-        );
-      `)
-    } catch {
-      // sqlite-vec not available — vector search will fall back to FTS
-      console.warn("sqlite-vec not available; vector search disabled")
-    }
+    console.log("Embeddings: block_embeddings table + JS cosine similarity")
   }
 
   async close(): Promise<void> {
@@ -167,6 +165,12 @@ export class SqliteStorage implements Storage {
       `INSERT INTO blocks (id, project_id, text, timestamp, content_type, category, annotation, confidence, is_pinned, is_unrelated)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(b.id, b.projectId, b.text, b.timestamp, b.contentType, b.category ?? null, b.annotation ?? null, b.confidence ?? null, b.isPinned ? 1 : 0, b.isUnrelated ? 1 : 0)
+
+    // Fire-and-forget: generate embedding in background
+    // Errors are logged but never propagated — block is saved either way
+    this.ensureEmbedding(b.id, b.text).catch((err) =>
+      console.error(`Embedding failed for block ${b.id}:`, err.message)
+    )
   }
 
   async updateBlock(b: Partial<Block> & { id: string; projectId: string }): Promise<void> {
@@ -183,6 +187,13 @@ export class SqliteStorage implements Storage {
     if (sets.length === 0) return
     vals.push(b.id)
     this.db.prepare(`UPDATE blocks SET ${sets.join(", ")} WHERE id = ?`).run(...vals)
+
+    // Re-embed if text changed
+    if (b.text !== undefined) {
+      this.ensureEmbedding(b.id, b.text).catch((err) =>
+        console.error(`Re-embedding failed for block ${b.id}:`, err.message)
+      )
+    }
   }
 
   async deleteBlock(id: string, _projectId: string): Promise<void> {
@@ -324,9 +335,57 @@ export class SqliteStorage implements Storage {
     }))
   }
 
-  async vectorSearch(_embedding: Float32Array, _projectId?: string, _limit = 20): Promise<SearchResult[]> {
-    // sqlite-vec not loaded — fall back to empty results
-    return []
+  async setEmbedding(blockId: string, model: string, embedding: number[]): Promise<void> {
+    this.db.prepare(
+      `INSERT OR REPLACE INTO block_embeddings (block_id, embedding, model, updated_at)
+       VALUES (?, ?, ?, ?)`
+    ).run(blockId, JSON.stringify(embedding), model, Date.now())
+  }
+
+  async getEmbedding(blockId: string): Promise<number[] | null> {
+    const row = this.db.prepare(
+      "SELECT embedding FROM block_embeddings WHERE block_id = ?"
+    ).get(blockId) as any
+    if (!row) return null
+    return JSON.parse(row.embedding) as number[]
+  }
+
+  async vectorSearch(queryEmbedding: number[], projectId?: string, limit = 20): Promise<SearchResult[]> {
+    // Load all candidate embeddings
+    let rows: any[]
+    if (projectId) {
+      rows = this.db.prepare(`
+        SELECT b.*, p.name as project_name, be.embedding
+        FROM blocks b
+        JOIN block_embeddings be ON be.block_id = b.id
+        JOIN projects p ON p.id = b.project_id
+        WHERE b.project_id = ?
+      `).all(projectId) as any[]
+    } else {
+      rows = this.db.prepare(`
+        SELECT b.*, p.name as project_name, be.embedding
+        FROM blocks b
+        JOIN block_embeddings be ON be.block_id = b.id
+        JOIN projects p ON p.id = b.project_id
+      `).all() as any[]
+    }
+
+    // Compute cosine similarity and sort
+    const scored = rows.map((r) => {
+      const emb = JSON.parse(r.embedding) as number[]
+      const score = cosineSimilarity(queryEmbedding, emb)
+      return { block: this.rowToBlock(r), projectName: r.project_name, score }
+    })
+
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, limit)
+  }
+
+  /** Fire-and-forget: generate and store an embedding for a block text. */
+  private async ensureEmbedding(blockId: string, text: string): Promise<void> {
+    if (!text.trim()) return
+    const result = await embedText(text)
+    this.setEmbedding(blockId, result.model, result.embedding)
   }
 
   // ── Graph ────────────────────────────────────────────────────────────────

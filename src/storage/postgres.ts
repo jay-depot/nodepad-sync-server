@@ -68,6 +68,13 @@ export class PostgresStorage implements Storage {
       );
 
       CREATE INDEX IF NOT EXISTS idx_ghost_project ON ghost_notes(project_id);
+
+      CREATE TABLE IF NOT EXISTS block_embeddings (
+        block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
+        embedding DOUBLE PRECISION[] NOT NULL,
+        model TEXT NOT NULL DEFAULT 'nomic-embed-text',
+        updated_at BIGINT NOT NULL
+      );
     `)
 
     // Full-text search via tsvector
@@ -301,10 +308,66 @@ export class PostgresStorage implements Storage {
     }))
   }
 
-  async vectorSearch(_embedding: Float32Array, _projectId?: string, _limit = 20): Promise<SearchResult[]> {
-    // pgvector support — requires pgvector extension
-    // TODO: add pgvector support when extension is available
-    return []
+  async setEmbedding(blockId: string, model: string, embedding: number[]): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO block_embeddings (block_id, embedding, model, updated_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (block_id) DO UPDATE SET embedding = $2, model = $3, updated_at = $4`,
+      [blockId, embedding, model, Date.now()]
+    )
+  }
+
+  async getEmbedding(blockId: string): Promise<number[] | null> {
+    const { rows } = await this.pool.query(
+      "SELECT embedding FROM block_embeddings WHERE block_id = $1", [blockId]
+    )
+    if (!rows[0]) return null
+    return rows[0].embedding as number[]
+  }
+
+  async vectorSearch(queryEmbedding: number[], projectId?: string, limit = 20): Promise<SearchResult[]> {
+    let query: string
+    const params: any[] = [queryEmbedding]
+
+    if (projectId) {
+      query = `
+        SELECT b.*, p.name as project_name, be.embedding
+        FROM blocks b
+        JOIN block_embeddings be ON be.block_id = b.id
+        JOIN projects p ON p.id = b.project_id
+        WHERE b.project_id = $2
+      `
+      params.push(projectId)
+    } else {
+      query = `
+        SELECT b.*, p.name as project_name, be.embedding
+        FROM blocks b
+        JOIN block_embeddings be ON be.block_id = b.id
+        JOIN projects p ON p.id = b.project_id
+      `
+    }
+
+    const { rows } = await this.pool.query(query, params)
+
+    const scored = rows.map((r: any) => {
+      const emb = r.embedding as number[]
+      const score = this.cosineSimilarity(queryEmbedding, emb)
+      return { block: this.rowToBlock(r), projectName: r.project_name, score }
+    })
+
+    scored.sort((a: any, b: any) => b.score - a.score)
+    return scored.slice(0, limit)
+  }
+
+  private cosineSimilarity(a: number[], b: number[]): number {
+    let dot = 0, normA = 0, normB = 0
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i]
+      normA += a[i] * a[i]
+      normB += b[i] * b[i]
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB)
+    return denom === 0 ? 0 : dot / denom
   }
 
   // ── Graph ────────────────────────────────────────────────────────────────

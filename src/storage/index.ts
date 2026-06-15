@@ -45,9 +45,13 @@ export interface Storage {
   // Snapshot
   getSnapshot(projectId: string): Promise<SyncSnapshot>
 
+  // Embeddings
+  setEmbedding(blockId: string, model: string, embedding: number[]): Promise<void>
+  getEmbedding(blockId: string): Promise<number[] | null>
+
   // Search
   searchBlocks(query: string, projectId?: string, limit?: number): Promise<SearchResult[]>
-  vectorSearch(embedding: Float32Array, projectId?: string, limit?: number): Promise<SearchResult[]>
+  vectorSearch(embedding: number[], projectId?: string, limit?: number): Promise<SearchResult[]>
 
   // Graph
   getGraph(projectId: string): Promise<GraphData>
