@@ -28,9 +28,9 @@ function ollamaFetch(endpoint: string, options: {
         res.on("data", (chunk) => (body += chunk))
         res.on("end", () => {
           try {
-            resolve({ status: res.statusCode, data: JSON.parse(body) })
+            resolve({ status: res.statusCode ?? 0, data: JSON.parse(body) })
           } catch {
-            resolve({ status: res.statusCode, data: body })
+            resolve({ status: res.statusCode ?? 0, data: body })
           }
         })
       }

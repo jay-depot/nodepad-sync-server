@@ -1,0 +1,19 @@
+services:
+  sync:
+    build: .
+    image: nodepad-sync-server
+    container_name: nodepad-sync
+    restart: unless-stopped
+    ports:
+      - "3001:3001"   # WebSocket sync
+      - "3100:3100"   # MCP HTTP
+    environment:
+      PORT: "3001"
+      MCP_PORT: "3100"
+      AUTH_TOKEN: "changeme"
+      DB_TYPE: "sqlite"
+    volumes:
+      - nodepad-data:/app/data
+
+volumes:
+  nodepad-data:

@@ -8,7 +8,7 @@ import { createInterface } from "readline"
 import { createServer, IncomingMessage, ServerResponse } from "http"
 import type { Storage } from "../storage/index.js"
 import type { Project, Block, SearchResult } from "../types.js"
-import { embedText, cosineSimilarity } from "../embeddings/ollama.js"
+import { embedText, embedBatch, cosineSimilarity } from "../embeddings/ollama.js"
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
