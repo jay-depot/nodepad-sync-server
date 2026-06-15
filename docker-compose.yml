@@ -1,6 +1,5 @@
 services:
   # ── SQLite mode (default) ─────────────────────────────────────────────────────
-  # Just the app, data in a named volume. Set AUTH_TOKEN.
   sync:
     &app
     build: .
@@ -15,16 +14,17 @@ services:
       MCP_PORT: "3100"
       AUTH_TOKEN: "changeme"
       DB_TYPE: "sqlite"
+      OLLAMA_URL: "http://ollama:11434"
     volumes:
       - nodepad-data:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
     profiles:
       - sqlite
       - default
 
   # ── Postgres mode ──────────────────────────────────────────────────────────────
-  # Spins up a PostgreSQL 17 instance. You can also point at an existing one by
-  # commenting out this service and setting DB_URL in the environment instead.
-  # Activate with: docker compose --profile pg up -d
   sync-pg:
     <<: *app
     container_name: nodepad-sync-pg
@@ -33,13 +33,37 @@ services:
       MCP_PORT: "3100"
       AUTH_TOKEN: "changeme"
       DB_TYPE: "postgres"
-      DB_URL: "postgresql://nodepad:***@pg:5432/nodepad"
+      DB_URL: "postgresql://nodepad:changeme@pg:5432/nodepad"
+      OLLAMA_URL: "http://ollama:11434"
     depends_on:
       pg:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     profiles:
       - pg
 
+  # ── Ollama ─────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nodepad-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    profiles:
+      - sqlite
+      - pg
+      - default
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────────
   pg:
     image: postgres:17-alpine
     container_name: nodepad-pg
@@ -61,3 +85,4 @@ services:
 volumes:
   nodepad-data:
   pg-data:
+  ollama-models:

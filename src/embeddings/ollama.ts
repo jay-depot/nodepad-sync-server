@@ -3,7 +3,7 @@
 
 import http from "http"
 
-const OLLAMA_DEFAULT = "http://127.0.0.1:11434"
+const OLLAMA_DEFAULT = process.env.OLLAMA_URL || "http://127.0.0.1:11434"
 const DEFAULT_MODEL = process.env.EMBEDDING_MODEL || "nomic-embed-text"
 const EMBEDDING_DIM = parseInt(process.env.EMBEDDING_DIM || "768", 10)
 
