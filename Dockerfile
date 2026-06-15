@@ -19,7 +19,7 @@ RUN apk add --no-cache tini wget
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm rebuild better-sqlite3
 
 COPY --from=builder /build/dist/ ./dist/
