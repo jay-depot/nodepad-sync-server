@@ -15,7 +15,7 @@ RUN npx tsc
 
 FROM node:22-alpine
 
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini wget
 
 WORKDIR /app
 
@@ -23,9 +23,11 @@ COPY package.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm rebuild better-sqlite3
 
 COPY --from=builder /build/dist/ ./dist/
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 3001 3100
 VOLUME /app/data
 
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/index.js"]
+ENTRYPOINT ["/sbin/tini", "--", "/docker-entrypoint.sh"]
+CMD []
