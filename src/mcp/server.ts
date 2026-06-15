@@ -1,0 +1,361 @@
+// ── MCP Server ─────────────────────────────────────────────────────────────────
+// Exposes nodepad data via the Model Context Protocol (stdio transport).
+// Tools: search, CRUD for blocks/projects, graph traversal, synthesis.
+
+import { createInterface } from "readline"
+import type { Storage } from "../storage/index.js"
+import type { Project, Block, Edge, SubTask, GhostNote, SearchResult, GraphData } from "../types.js"
+
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
+
+interface McpRequest {
+  jsonrpc: "2.0"
+  id: number | string
+  method: string
+  params?: { [key: string]: JsonValue }
+}
+
+interface McpResponse {
+  jsonrpc: "2.0"
+  id: number | string | null
+  result?: { [key: string]: JsonValue }
+  error?: { code: number; message: string; data?: JsonValue }
+}
+
+interface ToolDefinition {
+  name: string
+  description: string
+  inputSchema: {
+    type: "object"
+    properties: { [key: string]: any }
+    required?: string[]
+  }
+}
+
+export class McpServer {
+  private tools: ToolDefinition[] = [
+    {
+      name: "list_projects",
+      description: "List all projects",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "get_project",
+      description: "Get a project by ID",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Project ID" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "create_project",
+      description: "Create a new project",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Project ID (optional, auto-generated if omitted)" },
+          name: { type: "string", description: "Project name" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "delete_project",
+      description: "Delete a project and all its data",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Project ID" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "get_block",
+      description: "Get a single block by ID",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Block ID" } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "create_block",
+      description: "Create a new block in a project",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Block ID (optional)" },
+          projectId: { type: "string", description: "Project ID" },
+          text: { type: "string", description: "Block text content" },
+          contentType: { type: "string", description: "Content type (claim, question, idea, etc.)", enum: ["entity", "claim", "question", "task", "idea", "reference", "quote", "definition", "opinion", "reflection", "narrative", "comparison", "thesis", "general"] },
+          category: { type: "string", description: "Category label" },
+        },
+        required: ["projectId", "text"],
+      },
+    },
+    {
+      name: "update_block",
+      description: "Update a block's text, type, or category",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Block ID" },
+          projectId: { type: "string", description: "Project ID" },
+          text: { type: "string", description: "New text" },
+          contentType: { type: "string", description: "New content type" },
+          category: { type: "string", description: "New category" },
+          annotation: { type: "string", description: "New annotation" },
+        },
+        required: ["id", "projectId"],
+      },
+    },
+    {
+      name: "delete_block",
+      description: "Delete a block",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Block ID" },
+          projectId: { type: "string", description: "Project ID" },
+        },
+        required: ["id", "projectId"],
+      },
+    },
+    {
+      name: "search_blocks",
+      description: "Full-text search across blocks. Returns blocks ranked by relevance.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+          projectId: { type: "string", description: "Optional: filter by project" },
+          limit: { type: "number", description: "Max results (default: 20)" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "get_graph",
+      description: "Get the full graph (nodes + edges) for a project",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+        },
+        required: ["projectId"],
+      },
+    },
+    {
+      name: "find_connected",
+      description: "Traverse the graph from a block to find connected blocks",
+      inputSchema: {
+        type: "object",
+        properties: {
+          blockId: { type: "string", description: "Starting block ID" },
+          depth: { type: "number", description: "Traversal depth (default: 2, max: 5)" },
+        },
+        required: ["blockId"],
+      },
+    },
+    {
+      name: "get_synthesis",
+      description: "Get ghost notes (synthesis insights) for a project",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+        },
+        required: ["projectId"],
+      },
+    },
+    {
+      name: "create_edge",
+      description: "Create a connection (influencedBy edge) between two blocks",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sourceBlockId: { type: "string", description: "Source block ID" },
+          targetBlockId: { type: "string", description: "Target block ID" },
+        },
+        required: ["sourceBlockId", "targetBlockId"],
+      },
+    },
+    {
+      name: "delete_edge",
+      description: "Remove a connection between two blocks",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sourceBlockId: { type: "string", description: "Source block ID" },
+          targetBlockId: { type: "string", description: "Target block ID" },
+        },
+        required: ["sourceBlockId", "targetBlockId"],
+      },
+    },
+  ]
+
+  constructor(private storage: Storage) {}
+
+  async start(): Promise<void> {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false })
+
+    rl.on("line", async (line) => {
+      try {
+        const req: McpRequest = JSON.parse(line)
+        const response = await this.handleRequest(req)
+        process.stdout.write(JSON.stringify(response) + "\n")
+      } catch (err) {
+        // Ignore malformed JSON
+      }
+    })
+
+    // Send initialize notification
+    this.sendNotification("initialized", { tools: this.tools })
+  }
+
+  private sendNotification(method: string, params: any): void {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method,
+      params,
+    }) + "\n")
+  }
+
+  private async handleRequest(req: McpRequest): Promise<McpResponse> {
+    const { id, method, params = {} } = req
+
+    try {
+      switch (method) {
+        case "initialize":
+          return this.ok(id, {
+            protocolVersion: "2024-11-05",
+            capabilities: { tools: {} },
+            serverInfo: { name: "nodepad-sync", version: "0.1.0" },
+          })
+
+        case "tools/list":
+          return this.ok(id, { tools: this.tools })
+
+        case "tools/call":
+          return await this.handleToolCall(id, params.name as string, (params.arguments || {}) as Record<string, JsonValue>)
+
+        case "ping":
+          return this.ok(id, {})
+
+        default:
+          return this.err(id, -32601, `Method not found: ${method}`)
+      }
+    } catch (err: any) {
+      return this.err(id, -32603, err.message || "Internal error")
+    }
+  }
+
+  private async handleToolCall(id: number | string, name: string, args: Record<string, JsonValue>): Promise<McpResponse> {
+    switch (name) {
+      case "list_projects": {
+        const projects = await this.storage.listProjects()
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] })
+      }
+
+      case "get_project": {
+        const project = await this.storage.getProject(args.id as string)
+        if (!project) return this.err(id, -32602, "Project not found")
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(project, null, 2) }] })
+      }
+
+      case "create_project": {
+        const project: Project = {
+          id: (args.id as string) || crypto.randomUUID(),
+          name: args.name as string,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          version: 1,
+        }
+        await this.storage.createProject(project)
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(project, null, 2) }] })
+      }
+
+      case "delete_project": {
+        await this.storage.deleteProject(args.id as string)
+        return this.ok(id, { content: [{ type: "text", text: "Deleted" }] })
+      }
+
+      case "get_block": {
+        const block = await this.storage.getBlock(args.id as string)
+        if (!block) return this.err(id, -32602, "Block not found")
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(block, null, 2) }] })
+      }
+
+      case "create_block": {
+        const block: Block = {
+          id: (args.id as string) || crypto.randomUUID(),
+          projectId: args.projectId as string,
+          text: args.text as string,
+          timestamp: Date.now(),
+          contentType: (args.contentType as string) || "general",
+          category: args.category as string | undefined,
+          isPinned: false,
+          isUnrelated: false,
+        }
+        await this.storage.createBlock(block)
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(block, null, 2) }] })
+      }
+
+      case "update_block": {
+        await this.storage.updateBlock(args as any)
+        return this.ok(id, { content: [{ type: "text", text: "Updated" }] })
+      }
+
+      case "delete_block": {
+        await this.storage.deleteBlock(args.id as string, args.projectId as string)
+        return this.ok(id, { content: [{ type: "text", text: "Deleted" }] })
+      }
+
+      case "search_blocks": {
+        const results = await this.storage.searchBlocks(
+          args.query as string,
+          args.projectId as string | undefined,
+          (args.limit as number) || 20,
+        )
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] })
+      }
+
+      case "get_graph": {
+        const graph = await this.storage.getGraph(args.projectId as string)
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(graph, null, 2) }] })
+      }
+
+      case "find_connected": {
+        const depth = Math.min((args.depth as number) || 2, 5)
+        const graph = await this.storage.findConnected(args.blockId as string, depth)
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(graph, null, 2) }] })
+      }
+
+      case "get_synthesis": {
+        const notes = await this.storage.getGhostNotes(args.projectId as string)
+        return this.ok(id, { content: [{ type: "text", text: JSON.stringify(notes, null, 2) }] })
+      }
+
+      case "create_edge": {
+        await this.storage.createEdge(args as any)
+        return this.ok(id, { content: [{ type: "text", text: "Created" }] })
+      }
+
+      case "delete_edge": {
+        await this.storage.deleteEdge(args.sourceBlockId as string, args.targetBlockId as string)
+        return this.ok(id, { content: [{ type: "text", text: "Deleted" }] })
+      }
+
+      default:
+        return this.err(id, -32602, `Unknown tool: ${name}`)
+    }
+  }
+
+  private ok(id: number | string | null, result: any): McpResponse {
+    return { jsonrpc: "2.0", id, result }
+  }
+
+  private err(id: number | string | null, code: number, message: string, data?: JsonValue): McpResponse {
+    return { jsonrpc: "2.0", id, error: { code, message, data } }
+  }
+}
