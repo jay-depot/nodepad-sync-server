@@ -255,7 +255,14 @@ export class McpServer {
   private handleHttp(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url || "/", `http://${req.headers.host}`)
 
-    // Auth check on all routes
+    // Health check — no auth required
+    if (req.method === "GET" && url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+
+    // Auth check on all other routes
     const token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "")
       || url.searchParams.get("token") || ""
     if (token !== this.authToken) {
@@ -322,13 +329,6 @@ export class McpServer {
           }))
         }
       })
-      return
-    }
-
-    // Health check
-    if (req.method === "GET" && url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" })
-      res.end(JSON.stringify({ ok: true }))
       return
     }
 
