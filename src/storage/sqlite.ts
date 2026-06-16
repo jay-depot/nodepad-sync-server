@@ -310,6 +310,44 @@ export class SqliteStorage implements Storage {
     }
   }
 
+  async getAllSnapshots(): Promise<SyncSnapshot> {
+    const allProjects = await this.listProjects()
+    const projectIds = allProjects.map(p => p.id)
+    const [blocks, ghostNotes] = await Promise.all([
+      this.db.prepare("SELECT * FROM blocks").all() as any[],
+      this.db.prepare("SELECT * FROM ghost_notes").all() as any[],
+    ])
+    const edges = this.db.prepare(
+      "SELECT e.source_block_id, e.target_block_id FROM edges e"
+    ).all() as any[]
+    const subtasks = this.db.prepare(
+      "SELECT s.* FROM subtasks s"
+    ).all() as any[]
+
+    return {
+      projects: allProjects,
+      blocks: blocks.map(r => this.rowToBlock(r)),
+      edges: edges.map(r => ({ sourceBlockId: r.source_block_id, targetBlockId: r.target_block_id })),
+      subtasks: subtasks.map(r => ({
+        id: r.id,
+        blockId: r.block_id,
+        text: r.text,
+        isDone: r.is_done === 1,
+        timestamp: r.timestamp,
+      })),
+      ghostNotes: ghostNotes.map(r => ({
+        id: r.id,
+        projectId: r.project_id,
+        text: r.text,
+        category: r.category,
+        createdAt: r.created_at,
+        isGenerating: false,
+        timestamp: r.created_at,
+      })),
+      lastSeq: 0,
+    }
+  }
+
   // ── Search ───────────────────────────────────────────────────────────────
 
   async searchBlocks(query: string, projectId?: string, limit = 20): Promise<SearchResult[]> {

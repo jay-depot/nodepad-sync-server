@@ -58,7 +58,12 @@ export class SyncServer {
           if (msg.type === "subscribe") {
             state.projectId = msg.projectId
             const snapshot = await this.storage.getSnapshot(msg.projectId)
-            ws.send(JSON.stringify({ type: "snapshot", ...snapshot }))
+            const allProjects = await this.storage.listProjects()
+            ws.send(JSON.stringify({
+              type: "snapshot",
+              ...snapshot,
+              projects: allProjects,
+            }))
             return
           }
 

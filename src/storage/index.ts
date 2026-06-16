@@ -44,6 +44,7 @@ export interface Storage {
 
   // Snapshot
   getSnapshot(projectId: string): Promise<SyncSnapshot>
+  getAllSnapshots(): Promise<SyncSnapshot>
 
   // Embeddings
   setEmbedding(blockId: string, model: string, embedding: number[]): Promise<void>

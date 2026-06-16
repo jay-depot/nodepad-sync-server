@@ -292,6 +292,34 @@ export class PostgresStorage implements Storage {
     return { projects, blocks, edges, subtasks, ghostNotes, lastSeq: 0 }
   }
 
+  async getAllSnapshots(): Promise<SyncSnapshot> {
+    const [projects, blocks, ghostNotes] = await Promise.all([
+      this.listProjects(),
+      this.pool.query("SELECT * FROM blocks").then(r => r.rows.map((r: any) => this.rowToBlock(r))),
+      this.pool.query("SELECT * FROM ghost_notes").then(r => r.rows.map((r: any) => ({
+        id: r.id,
+        projectId: r.project_id,
+        text: r.text,
+        category: r.category,
+        createdAt: Number(r.created_at),
+        isGenerating: false,
+        timestamp: Number(r.created_at),
+      }))),
+    ])
+    const { rows: edgeRows } = await this.pool.query("SELECT source_block_id, target_block_id FROM edges")
+    const edges = edgeRows.map((r: any) => ({ sourceBlockId: r.source_block_id, targetBlockId: r.target_block_id }))
+    const { rows: subtaskRows } = await this.pool.query("SELECT s.* FROM subtasks s")
+    const subtasks = subtaskRows.map((r: any) => ({
+      id: r.id,
+      blockId: r.block_id,
+      text: r.text,
+      isDone: r.is_done,
+      timestamp: Number(r.timestamp),
+    }))
+
+    return { projects, blocks, edges, subtasks, ghostNotes, lastSeq: 0 }
+  }
+
   // ── Search ───────────────────────────────────────────────────────────────
 
   async searchBlocks(query: string, projectId?: string, limit = 20): Promise<SearchResult[]> {
