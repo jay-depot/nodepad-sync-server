@@ -401,6 +401,7 @@ export class McpServer {
           version: 1,
         }
         await this.storage.createProject(project)
+        this.broadcastOp?.("project:create", project, project.id)
         return this.ok(id, { content: [{ type: "text", text: JSON.stringify(project, null, 2) }] })
       }
 
