@@ -162,7 +162,7 @@ export class SqliteStorage implements Storage {
 
   async createBlock(b: Block): Promise<void> {
     this.db.prepare(
-      `INSERT INTO blocks (id, project_id, text, timestamp, content_type, category, annotation, confidence, is_pinned, is_unrelated)
+      `INSERT OR REPLACE INTO blocks (id, project_id, text, timestamp, content_type, category, annotation, confidence, is_pinned, is_unrelated)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(b.id, b.projectId, b.text, b.timestamp, b.contentType, b.category ?? null, b.annotation ?? null, b.confidence ?? null, b.isPinned ? 1 : 0, b.isUnrelated ? 1 : 0)
 

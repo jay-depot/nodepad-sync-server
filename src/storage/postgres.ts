@@ -144,7 +144,16 @@ export class PostgresStorage implements Storage {
   async createBlock(b: Block): Promise<void> {
     await this.pool.query(
       `INSERT INTO blocks (id, project_id, text, timestamp, content_type, category, annotation, confidence, is_pinned, is_unrelated)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET
+         text = EXCLUDED.text,
+         timestamp = EXCLUDED.timestamp,
+         content_type = EXCLUDED.content_type,
+         category = EXCLUDED.category,
+         annotation = EXCLUDED.annotation,
+         confidence = EXCLUDED.confidence,
+         is_pinned = EXCLUDED.is_pinned,
+         is_unrelated = EXCLUDED.is_unrelated`,
       [b.id, b.projectId, b.text, b.timestamp, b.contentType, b.category ?? null, b.annotation ?? null, b.confidence ?? null, b.isPinned, b.isUnrelated]
     )
   }
