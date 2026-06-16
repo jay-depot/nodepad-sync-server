@@ -43,6 +43,16 @@ async function main() {
     const sync = new SyncServer(storage, PORT, AUTH_TOKEN)
     await sync.start()
 
+    // Wire MCP mutations to broadcast through WebSocket sync clients
+    mcp.setBroadcast((type, payload, projectId) => {
+      const syncMsg = {
+        seq: 0,
+        op: { type, payload } as any,
+        clientTimestamp: Date.now(),
+      }
+      sync.broadcastOp(syncMsg, projectId || null)
+    })
+
     // MCP on stdio (for gateway integration)
     await mcp.startStdio()
 

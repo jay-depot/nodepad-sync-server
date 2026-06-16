@@ -211,12 +211,19 @@ export class McpServer {
 
   private authToken: string
   private sseClients = new Set<(msg: string) => void>()
+  /** Optional callback to broadcast ops to WebSocket sync clients. */
+  private broadcastOp: ((type: string, payload: any, projectId?: string) => void) | null = null
 
   constructor(
     private storage: Storage,
     authToken?: string,
   ) {
     this.authToken = authToken || process.env.AUTH_TOKEN || "nodepad-sync-dev"
+  }
+
+  /** Set a callback for broadcasting ops to connected WebSocket sync clients. */
+  setBroadcast(fn: (type: string, payload: any, projectId?: string) => void): void {
+    this.broadcastOp = fn
   }
 
   // ── stdio transport ────────────────────────────────────────────────────────
@@ -420,16 +427,19 @@ export class McpServer {
           isUnrelated: false,
         }
         await this.storage.createBlock(block)
+        this.broadcastOp?.("block:create", block, block.projectId)
         return this.ok(id, { content: [{ type: "text", text: JSON.stringify(block, null, 2) }] })
       }
 
       case "update_block": {
         await this.storage.updateBlock(args as any)
+        this.broadcastOp?.("block:update", args, (args as any).projectId)
         return this.ok(id, { content: [{ type: "text", text: "Updated" }] })
       }
 
       case "delete_block": {
         await this.storage.deleteBlock(args.id as string, args.projectId as string)
+        this.broadcastOp?.("block:delete", args, args.projectId as string)
         return this.ok(id, { content: [{ type: "text", text: "Deleted" }] })
       }
 
@@ -481,11 +491,13 @@ export class McpServer {
 
       case "create_edge": {
         await this.storage.createEdge(args as any)
+        this.broadcastOp?.("edge:create", args, undefined)
         return this.ok(id, { content: [{ type: "text", text: "Created" }] })
       }
 
       case "delete_edge": {
         await this.storage.deleteEdge(args.sourceBlockId as string, args.targetBlockId as string)
+        this.broadcastOp?.("edge:delete", args, undefined)
         return this.ok(id, { content: [{ type: "text", text: "Deleted" }] })
       }
 

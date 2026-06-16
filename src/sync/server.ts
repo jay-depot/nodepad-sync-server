@@ -77,11 +77,7 @@ export class SyncServer {
             if (this.opLog.length > 10000) this.opLog.shift()
 
             // Broadcast to other clients on the same project
-            for (const [otherWs, otherState] of this.clients) {
-              if (otherWs !== ws && otherState.projectId === state.projectId && otherWs.readyState === WebSocket.OPEN) {
-                otherWs.send(JSON.stringify({ type: "op", ...syncMsg }))
-              }
-            }
+            this.broadcastOp(syncMsg, state.projectId, ws)
 
             // Ack
             ws.send(JSON.stringify({ type: "ack", seq: syncMsg.seq }))
@@ -108,6 +104,19 @@ export class SyncServer {
     server.listen(this.port, "0.0.0.0", () => {
       console.log(`Sync server listening on port ${this.port}`)
     })
+  }
+
+  /**
+   * Broadcast a sync message to all connected clients subscribed to a project.
+   * Used by MCP tool handlers to push mutations to WebSocket clients in real time.
+   */
+  broadcastOp(syncMsg: SyncMessage, projectId: string | null, excludeWs?: WebSocket): void {
+    for (const [otherWs, otherState] of this.clients) {
+      if (otherWs === excludeWs) continue
+      if (otherState.projectId !== projectId) continue
+      if (otherWs.readyState !== WebSocket.OPEN) continue
+      otherWs.send(JSON.stringify({ type: "op", ...syncMsg }))
+    }
   }
 
   private async applyOp(op: SyncMessage["op"]): Promise<void> {
