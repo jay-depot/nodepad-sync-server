@@ -122,7 +122,19 @@ export class SyncServer {
         await this.storage.deleteProject(op.payload.id)
         break
       case "block:create":
-        await this.storage.createBlock(op.payload as any)
+        // Auto-create project if it doesn't exist yet
+        const blockPayload = op.payload as any
+        const existingProject = await this.storage.getProject(blockPayload.projectId)
+        if (!existingProject) {
+          await this.storage.createProject({
+            id: blockPayload.projectId,
+            name: blockPayload.projectId,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            version: 1,
+          })
+        }
+        await this.storage.createBlock(blockPayload)
         break
       case "block:update":
         await this.storage.updateBlock(op.payload as any)
@@ -146,7 +158,19 @@ export class SyncServer {
         await this.storage.deleteSubTask(op.payload.id, op.payload.blockId)
         break
       case "ghost:create":
-        await this.storage.createGhostNote(op.payload as any)
+        // Auto-create project if it doesn't exist yet
+        const ghostPayload = op.payload as any
+        const ghostProject = await this.storage.getProject(ghostPayload.projectId)
+        if (!ghostProject) {
+          await this.storage.createProject({
+            id: ghostPayload.projectId,
+            name: ghostPayload.projectId,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            version: 1,
+          })
+        }
+        await this.storage.createGhostNote(ghostPayload)
         break
       case "ghost:delete":
         await this.storage.deleteGhostNote(op.payload.id, op.payload.projectId)
