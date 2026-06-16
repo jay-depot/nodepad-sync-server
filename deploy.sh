@@ -17,7 +17,21 @@ AUTH_TOKEN="${AUTH_TOKEN:-nodepad-sync-dev}"
 MODE="${1:-sqlite}"
 NETWORK="nodepad-net"
 
+# ── Clean flag: remove all existing containers before starting ────────────────
+if [ "$MODE" = "--clean" ] || [ "$MODE" = "clean" ]; then
+  echo "==> Cleaning up all nodepad containers..."
+  docker rm -f nodepad-sync nodepad-ollama nodepad-pg 2>/dev/null || true
+  echo "==> Cleanup done."
+  MODE="${2:-sqlite}"
+fi
+
 echo "==> Building nodepad-sync-server image..."
+
+# Remove old sync container so the image can be freed
+if docker ps -a --format '{{.Names}}' | grep -q '^nodepad-sync$'; then
+  docker rm -f nodepad-sync 2>/dev/null || true
+fi
+
 docker build -t nodepad-sync-server .
 
 # Create shared network if it doesn't exist
