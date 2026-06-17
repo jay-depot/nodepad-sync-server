@@ -25,7 +25,8 @@ export class PostgresStorage implements Storage {
         name TEXT NOT NULL,
         created_at BIGINT NOT NULL,
         updated_at BIGINT NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1
+        version INTEGER NOT NULL DEFAULT 1,
+        deleted_at BIGINT
       );
 
       CREATE TABLE IF NOT EXISTS blocks (
@@ -38,7 +39,8 @@ export class PostgresStorage implements Storage {
         annotation TEXT,
         confidence REAL,
         is_pinned BOOLEAN NOT NULL DEFAULT false,
-        is_unrelated BOOLEAN NOT NULL DEFAULT false
+        is_unrelated BOOLEAN NOT NULL DEFAULT false,
+        deleted_at BIGINT
       );
 
       CREATE INDEX IF NOT EXISTS idx_blocks_project ON blocks(project_id);
@@ -46,6 +48,7 @@ export class PostgresStorage implements Storage {
       CREATE TABLE IF NOT EXISTS edges (
         source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         target_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        deleted_at BIGINT,
         PRIMARY KEY (source_block_id, target_block_id)
       );
 
@@ -54,7 +57,8 @@ export class PostgresStorage implements Storage {
         block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         text TEXT NOT NULL,
         is_done BOOLEAN NOT NULL DEFAULT false,
-        timestamp BIGINT NOT NULL
+        timestamp BIGINT NOT NULL,
+        deleted_at BIGINT
       );
 
       CREATE INDEX IF NOT EXISTS idx_subtasks_block ON subtasks(block_id);
@@ -64,7 +68,8 @@ export class PostgresStorage implements Storage {
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         text TEXT NOT NULL,
         category TEXT NOT NULL DEFAULT 'thesis',
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        deleted_at BIGINT
       );
 
       CREATE INDEX IF NOT EXISTS idx_ghost_project ON ghost_notes(project_id);
@@ -100,7 +105,7 @@ export class PostgresStorage implements Storage {
   }
 
   async listProjects(): Promise<Project[]> {
-    const { rows } = await this.pool.query("SELECT * FROM projects ORDER BY updated_at DESC")
+    const { rows } = await this.pool.query("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC")
     return rows.map(r => this.rowToProject(r))
   }
 
@@ -124,6 +129,14 @@ export class PostgresStorage implements Storage {
   }
 
   async deleteProject(id: string): Promise<void> {
+    await this.pool.query("UPDATE projects SET deleted_at = $1 WHERE id = $2", [Date.now(), id])
+  }
+
+  async restoreProject(id: string): Promise<void> {
+    await this.pool.query("UPDATE projects SET deleted_at = NULL WHERE id = $1", [id])
+  }
+
+  async purgeProject(id: string): Promise<void> {
     await this.pool.query("DELETE FROM projects WHERE id = $1", [id])
   }
 
@@ -136,7 +149,7 @@ export class PostgresStorage implements Storage {
 
   async getBlocks(projectId: string): Promise<Block[]> {
     const { rows } = await this.pool.query(
-      "SELECT * FROM blocks WHERE project_id = $1 ORDER BY timestamp DESC", [projectId]
+      "SELECT * FROM blocks WHERE project_id = $1 AND deleted_at IS NULL ORDER BY timestamp DESC", [projectId]
     )
     return rows.map(r => this.rowToBlock(r))
   }
@@ -176,6 +189,14 @@ export class PostgresStorage implements Storage {
   }
 
   async deleteBlock(id: string, _projectId: string): Promise<void> {
+    await this.pool.query("UPDATE blocks SET deleted_at = $1 WHERE id = $2", [Date.now(), id])
+  }
+
+  async restoreBlock(id: string, _projectId: string): Promise<void> {
+    await this.pool.query("UPDATE blocks SET deleted_at = NULL WHERE id = $1", [id])
+  }
+
+  async purgeBlock(id: string, _projectId: string): Promise<void> {
     await this.pool.query("DELETE FROM blocks WHERE id = $1", [id])
   }
 
@@ -186,7 +207,8 @@ export class PostgresStorage implements Storage {
       `SELECT e.source_block_id, e.target_block_id FROM edges e
        JOIN blocks b1 ON e.source_block_id = b1.id
        JOIN blocks b2 ON e.target_block_id = b2.id
-       WHERE b1.project_id = $1 AND b2.project_id = $1`,
+       WHERE b1.project_id = $1 AND b2.project_id = $1
+       AND e.deleted_at IS NULL`,
       [projectId]
     )
     return rows.map(r => ({ sourceBlockId: r.source_block_id, targetBlockId: r.target_block_id }))
@@ -201,7 +223,14 @@ export class PostgresStorage implements Storage {
 
   async deleteEdge(sourceBlockId: string, targetBlockId: string): Promise<void> {
     await this.pool.query(
-      "DELETE FROM edges WHERE source_block_id = $1 AND target_block_id = $2",
+      "UPDATE edges SET deleted_at = $1 WHERE source_block_id = $2 AND target_block_id = $3",
+      [Date.now(), sourceBlockId, targetBlockId]
+    )
+  }
+
+  async restoreEdge(sourceBlockId: string, targetBlockId: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE edges SET deleted_at = NULL WHERE source_block_id = $1 AND target_block_id = $2",
       [sourceBlockId, targetBlockId]
     )
   }
@@ -210,7 +239,7 @@ export class PostgresStorage implements Storage {
 
   async getSubTasks(blockId: string): Promise<SubTask[]> {
     const { rows } = await this.pool.query(
-      "SELECT * FROM subtasks WHERE block_id = $1 ORDER BY timestamp", [blockId]
+      "SELECT * FROM subtasks WHERE block_id = $1 AND deleted_at IS NULL ORDER BY timestamp", [blockId]
     )
     return rows.map(r => ({
       id: r.id,
@@ -241,14 +270,18 @@ export class PostgresStorage implements Storage {
   }
 
   async deleteSubTask(id: string, _blockId: string): Promise<void> {
-    await this.pool.query("DELETE FROM subtasks WHERE id = $1", [id])
+    await this.pool.query("UPDATE subtasks SET deleted_at = $1 WHERE id = $2", [Date.now(), id])
+  }
+
+  async restoreSubTask(id: string, _blockId: string): Promise<void> {
+    await this.pool.query("UPDATE subtasks SET deleted_at = NULL WHERE id = $1", [id])
   }
 
   // ── Ghost notes ──────────────────────────────────────────────────────────
 
   async getGhostNotes(projectId: string): Promise<GhostNote[]> {
     const { rows } = await this.pool.query(
-      "SELECT * FROM ghost_notes WHERE project_id = $1 ORDER BY created_at DESC", [projectId]
+      "SELECT * FROM ghost_notes WHERE project_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC", [projectId]
     )
     return rows.map(r => ({
       id: r.id,
@@ -267,14 +300,18 @@ export class PostgresStorage implements Storage {
   }
 
   async deleteGhostNote(id: string, _projectId: string): Promise<void> {
-    await this.pool.query("DELETE FROM ghost_notes WHERE id = $1", [id])
+    await this.pool.query("UPDATE ghost_notes SET deleted_at = $1 WHERE id = $2", [Date.now(), id])
+  }
+
+  async restoreGhostNote(id: string, _projectId: string): Promise<void> {
+    await this.pool.query("UPDATE ghost_notes SET deleted_at = NULL WHERE id = $1", [id])
   }
 
   // ── Snapshot ─────────────────────────────────────────────────────────────
 
   async getSnapshot(projectId: string): Promise<SyncSnapshot> {
     const [projects, blocks, edges, subtasks, ghostNotes] = await Promise.all([
-      this.pool.query("SELECT * FROM projects WHERE id = $1", [projectId]).then(r => r.rows.map((r: any) => this.rowToProject(r))),
+      this.pool.query("SELECT * FROM projects WHERE id = $1 AND (deleted_at IS NULL)", [projectId]).then(r => r.rows.map((r: any) => this.rowToProject(r))),
       this.getBlocks(projectId),
       this.getEdges(projectId),
       this.pool.query(
@@ -295,8 +332,8 @@ export class PostgresStorage implements Storage {
   async getAllSnapshots(): Promise<SyncSnapshot> {
     const [projects, blocks, ghostNotes] = await Promise.all([
       this.listProjects(),
-      this.pool.query("SELECT * FROM blocks").then(r => r.rows.map((r: any) => this.rowToBlock(r))),
-      this.pool.query("SELECT * FROM ghost_notes").then(r => r.rows.map((r: any) => ({
+      this.pool.query("SELECT * FROM blocks WHERE deleted_at IS NULL").then(r => r.rows.map((r: any) => this.rowToBlock(r))),
+      this.pool.query("SELECT * FROM ghost_notes WHERE deleted_at IS NULL").then(r => r.rows.map((r: any) => ({
         id: r.id,
         projectId: r.project_id,
         text: r.text,
@@ -306,9 +343,9 @@ export class PostgresStorage implements Storage {
         timestamp: Number(r.created_at),
       }))),
     ])
-    const { rows: edgeRows } = await this.pool.query("SELECT source_block_id, target_block_id FROM edges")
+    const { rows: edgeRows } = await this.pool.query("SELECT source_block_id, target_block_id FROM edges WHERE deleted_at IS NULL")
     const edges = edgeRows.map((r: any) => ({ sourceBlockId: r.source_block_id, targetBlockId: r.target_block_id }))
-    const { rows: subtaskRows } = await this.pool.query("SELECT s.* FROM subtasks s")
+    const { rows: subtaskRows } = await this.pool.query("SELECT s.* FROM subtasks s WHERE s.deleted_at IS NULL")
     const subtasks = subtaskRows.map((r: any) => ({
       id: r.id,
       blockId: r.block_id,
@@ -467,6 +504,7 @@ export class PostgresStorage implements Storage {
       createdAt: Number(r.created_at),
       updatedAt: Number(r.updated_at),
       version: r.version,
+      deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
     }
   }
 
@@ -482,6 +520,7 @@ export class PostgresStorage implements Storage {
       confidence: r.confidence ?? null,
       isPinned: r.is_pinned,
       isUnrelated: r.is_unrelated,
+      deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
     }
   }
 }

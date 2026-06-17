@@ -29,7 +29,8 @@ export class SqliteStorage implements Storage {
         name TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1
+        version INTEGER NOT NULL DEFAULT 1,
+        deleted_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS blocks (
@@ -42,7 +43,8 @@ export class SqliteStorage implements Storage {
         annotation TEXT,
         confidence REAL,
         is_pinned INTEGER NOT NULL DEFAULT 0,
-        is_unrelated INTEGER NOT NULL DEFAULT 0
+        is_unrelated INTEGER NOT NULL DEFAULT 0,
+        deleted_at INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_blocks_project ON blocks(project_id);
@@ -50,6 +52,7 @@ export class SqliteStorage implements Storage {
       CREATE TABLE IF NOT EXISTS edges (
         source_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         target_block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        deleted_at INTEGER,
         PRIMARY KEY (source_block_id, target_block_id)
       );
 
@@ -58,7 +61,8 @@ export class SqliteStorage implements Storage {
         block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         text TEXT NOT NULL,
         is_done INTEGER NOT NULL DEFAULT 0,
-        timestamp INTEGER NOT NULL
+        timestamp INTEGER NOT NULL,
+        deleted_at INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_subtasks_block ON subtasks(block_id);
@@ -68,7 +72,8 @@ export class SqliteStorage implements Storage {
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         text TEXT NOT NULL,
         category TEXT NOT NULL DEFAULT 'thesis',
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        deleted_at INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_ghost_project ON ghost_notes(project_id);
@@ -122,7 +127,7 @@ export class SqliteStorage implements Storage {
   }
 
   async listProjects(): Promise<Project[]> {
-    const rows = this.db.prepare("SELECT * FROM projects ORDER BY updated_at DESC").all() as any[]
+    const rows = this.db.prepare("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC").all() as any[]
     return rows.map(r => this.rowToProject(r))
   }
 
@@ -144,6 +149,14 @@ export class SqliteStorage implements Storage {
   }
 
   async deleteProject(id: string): Promise<void> {
+    this.db.prepare("UPDATE projects SET deleted_at = ? WHERE id = ?").run(Date.now(), id)
+  }
+
+  async restoreProject(id: string): Promise<void> {
+    this.db.prepare("UPDATE projects SET deleted_at = NULL WHERE id = ?").run(id)
+  }
+
+  async purgeProject(id: string): Promise<void> {
     this.db.prepare("DELETE FROM projects WHERE id = ?").run(id)
   }
 
@@ -156,7 +169,7 @@ export class SqliteStorage implements Storage {
   }
 
   async getBlocks(projectId: string): Promise<Block[]> {
-    const rows = this.db.prepare("SELECT * FROM blocks WHERE project_id = ? ORDER BY timestamp DESC").all(projectId) as any[]
+    const rows = this.db.prepare("SELECT * FROM blocks WHERE project_id = ? AND deleted_at IS NULL ORDER BY timestamp DESC").all(projectId) as any[]
     return rows.map(r => this.rowToBlock(r))
   }
 
@@ -197,6 +210,14 @@ export class SqliteStorage implements Storage {
   }
 
   async deleteBlock(id: string, _projectId: string): Promise<void> {
+    this.db.prepare("UPDATE blocks SET deleted_at = ? WHERE id = ?").run(Date.now(), id)
+  }
+
+  async restoreBlock(id: string, _projectId: string): Promise<void> {
+    this.db.prepare("UPDATE blocks SET deleted_at = NULL WHERE id = ?").run(id)
+  }
+
+  async purgeBlock(id: string, _projectId: string): Promise<void> {
     this.db.prepare("DELETE FROM blocks WHERE id = ?").run(id)
   }
 
@@ -207,7 +228,8 @@ export class SqliteStorage implements Storage {
       `SELECT e.source_block_id, e.target_block_id FROM edges e
        JOIN blocks b1 ON e.source_block_id = b1.id
        JOIN blocks b2 ON e.target_block_id = b2.id
-       WHERE b1.project_id = ? AND b2.project_id = ?`
+       WHERE b1.project_id = ? AND b2.project_id = ?
+       AND e.deleted_at IS NULL`
     ).all(projectId, projectId) as any[]
     return rows.map(r => ({ sourceBlockId: r.source_block_id, targetBlockId: r.target_block_id }))
   }
@@ -220,14 +242,20 @@ export class SqliteStorage implements Storage {
 
   async deleteEdge(sourceBlockId: string, targetBlockId: string): Promise<void> {
     this.db.prepare(
-      "DELETE FROM edges WHERE source_block_id = ? AND target_block_id = ?"
+      "UPDATE edges SET deleted_at = ? WHERE source_block_id = ? AND target_block_id = ?"
+    ).run(Date.now(), sourceBlockId, targetBlockId)
+  }
+
+  async restoreEdge(sourceBlockId: string, targetBlockId: string): Promise<void> {
+    this.db.prepare(
+      "UPDATE edges SET deleted_at = NULL WHERE source_block_id = ? AND target_block_id = ?"
     ).run(sourceBlockId, targetBlockId)
   }
 
   // ── Subtasks ─────────────────────────────────────────────────────────────
 
   async getSubTasks(blockId: string): Promise<SubTask[]> {
-    const rows = this.db.prepare("SELECT * FROM subtasks WHERE block_id = ? ORDER BY timestamp").all(blockId) as any[]
+    const rows = this.db.prepare("SELECT * FROM subtasks WHERE block_id = ? AND deleted_at IS NULL ORDER BY timestamp").all(blockId) as any[]
     return rows.map(r => ({
       id: r.id,
       blockId: r.block_id,
@@ -255,13 +283,17 @@ export class SqliteStorage implements Storage {
   }
 
   async deleteSubTask(id: string, _blockId: string): Promise<void> {
-    this.db.prepare("DELETE FROM subtasks WHERE id = ?").run(id)
+    this.db.prepare("UPDATE subtasks SET deleted_at = ? WHERE id = ?").run(Date.now(), id)
+  }
+
+  async restoreSubTask(id: string, _blockId: string): Promise<void> {
+    this.db.prepare("UPDATE subtasks SET deleted_at = NULL WHERE id = ?").run(id)
   }
 
   // ── Ghost notes ──────────────────────────────────────────────────────────
 
   async getGhostNotes(projectId: string): Promise<GhostNote[]> {
-    const rows = this.db.prepare("SELECT * FROM ghost_notes WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as any[]
+    const rows = this.db.prepare("SELECT * FROM ghost_notes WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at DESC").all(projectId) as any[]
     return rows.map(r => ({
       id: r.id,
       projectId: r.project_id,
@@ -278,14 +310,18 @@ export class SqliteStorage implements Storage {
   }
 
   async deleteGhostNote(id: string, _projectId: string): Promise<void> {
-    this.db.prepare("DELETE FROM ghost_notes WHERE id = ?").run(id)
+    this.db.prepare("UPDATE ghost_notes SET deleted_at = ? WHERE id = ?").run(Date.now(), id)
+  }
+
+  async restoreGhostNote(id: string, _projectId: string): Promise<void> {
+    this.db.prepare("UPDATE ghost_notes SET deleted_at = NULL WHERE id = ?").run(id)
   }
 
   // ── Snapshot ─────────────────────────────────────────────────────────────
 
   async getSnapshot(projectId: string): Promise<SyncSnapshot> {
     const [projects, blocks, edges, subtasks, ghostNotes] = await Promise.all([
-      this.db.prepare("SELECT * FROM projects WHERE id = ?").all(projectId) as any[],
+      this.db.prepare("SELECT * FROM projects WHERE id = ? AND (deleted_at IS NULL)").all(projectId) as any[],
       this.getBlocks(projectId),
       this.getEdges(projectId),
       this.db.prepare(
@@ -314,14 +350,14 @@ export class SqliteStorage implements Storage {
     const allProjects = await this.listProjects()
     const projectIds = allProjects.map(p => p.id)
     const [blocks, ghostNotes] = await Promise.all([
-      this.db.prepare("SELECT * FROM blocks").all() as any[],
-      this.db.prepare("SELECT * FROM ghost_notes").all() as any[],
+      this.db.prepare("SELECT * FROM blocks WHERE deleted_at IS NULL").all() as any[],
+      this.db.prepare("SELECT * FROM ghost_notes WHERE deleted_at IS NULL").all() as any[],
     ])
     const edges = this.db.prepare(
-      "SELECT e.source_block_id, e.target_block_id FROM edges e"
+      "SELECT e.source_block_id, e.target_block_id FROM edges e WHERE e.deleted_at IS NULL"
     ).all() as any[]
     const subtasks = this.db.prepare(
-      "SELECT s.* FROM subtasks s"
+      "SELECT s.* FROM subtasks s WHERE s.deleted_at IS NULL"
     ).all() as any[]
 
     return {
@@ -484,6 +520,7 @@ export class SqliteStorage implements Storage {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       version: r.version,
+      deletedAt: r.deleted_at ?? null,
     }
   }
 
@@ -499,6 +536,7 @@ export class SqliteStorage implements Storage {
       confidence: r.confidence ?? null,
       isPinned: r.is_pinned === 1,
       isUnrelated: r.is_unrelated === 1,
+      deletedAt: r.deleted_at ?? null,
     }
   }
 }

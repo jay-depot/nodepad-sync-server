@@ -135,6 +135,12 @@ export class SyncServer {
       case "project:delete":
         await this.storage.deleteProject(op.payload.id)
         break
+      case "project:restore":
+        await this.storage.restoreProject(op.payload.id)
+        break
+      case "project:purge":
+        await this.storage.purgeProject(op.payload.id)
+        break
       case "block:create":
         // Auto-create project if it doesn't exist yet
         const blockPayload = op.payload as any
@@ -156,11 +162,20 @@ export class SyncServer {
       case "block:delete":
         await this.storage.deleteBlock(op.payload.id, op.payload.projectId)
         break
+      case "block:restore":
+        await this.storage.restoreBlock(op.payload.id, op.payload.projectId)
+        break
+      case "block:purge":
+        await this.storage.purgeBlock(op.payload.id, op.payload.projectId)
+        break
       case "edge:create":
         await this.storage.createEdge(op.payload as any)
         break
       case "edge:delete":
         await this.storage.deleteEdge(op.payload.sourceBlockId, op.payload.targetBlockId)
+        break
+      case "edge:restore":
+        await this.storage.restoreEdge(op.payload.sourceBlockId, op.payload.targetBlockId)
         break
       case "subtask:create":
         await this.storage.createSubTask(op.payload as any)
@@ -170,6 +185,9 @@ export class SyncServer {
         break
       case "subtask:delete":
         await this.storage.deleteSubTask(op.payload.id, op.payload.blockId)
+        break
+      case "subtask:restore":
+        await this.storage.restoreSubTask(op.payload.id, op.payload.blockId)
         break
       case "ghost:create":
         // Auto-create project if it doesn't exist yet
@@ -188,6 +206,9 @@ export class SyncServer {
         break
       case "ghost:delete":
         await this.storage.deleteGhostNote(op.payload.id, op.payload.projectId)
+        break
+      case "ghost:restore":
+        await this.storage.restoreGhostNote(op.payload.id, op.payload.projectId)
         break
     }
   }

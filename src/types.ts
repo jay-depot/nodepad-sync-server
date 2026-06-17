@@ -6,6 +6,7 @@ export interface Project {
   createdAt: number
   updatedAt: number
   version: number
+  deletedAt?: number | null
 }
 
 export interface Block {
@@ -19,12 +20,14 @@ export interface Block {
   confidence?: number | null
   isPinned: boolean
   isUnrelated: boolean
+  deletedAt?: number | null
   embedding?: Float32Array | null
 }
 
 export interface Edge {
   sourceBlockId: string
   targetBlockId: string
+  deletedAt?: number | null
 }
 
 export interface SubTask {
@@ -33,6 +36,7 @@ export interface SubTask {
   text: string
   isDone: boolean
   timestamp: number
+  deletedAt?: number | null
 }
 
 export interface GhostNote {
@@ -41,6 +45,7 @@ export interface GhostNote {
   text: string
   category: string
   createdAt: number
+  deletedAt?: number | null
 }
 
 // ── Sync operations ──────────────────────────────────────────────────────────
@@ -49,16 +54,23 @@ export type SyncOp =
   | { type: "project:create"; payload: Project }
   | { type: "project:update"; payload: Partial<Project> & { id: string } }
   | { type: "project:delete"; payload: { id: string } }
+  | { type: "project:restore"; payload: { id: string } }
+  | { type: "project:purge"; payload: { id: string } }
   | { type: "block:create"; payload: Block }
   | { type: "block:update"; payload: Partial<Block> & { id: string; projectId: string } }
   | { type: "block:delete"; payload: { id: string; projectId: string } }
+  | { type: "block:restore"; payload: { id: string; projectId: string } }
+  | { type: "block:purge"; payload: { id: string; projectId: string } }
   | { type: "edge:create"; payload: Edge }
   | { type: "edge:delete"; payload: Edge }
+  | { type: "edge:restore"; payload: Edge }
   | { type: "subtask:create"; payload: SubTask }
   | { type: "subtask:update"; payload: Partial<SubTask> & { id: string; blockId: string } }
   | { type: "subtask:delete"; payload: { id: string; blockId: string } }
+  | { type: "subtask:restore"; payload: { id: string; blockId: string } }
   | { type: "ghost:create"; payload: GhostNote }
   | { type: "ghost:delete"; payload: { id: string; projectId: string } }
+  | { type: "ghost:restore"; payload: { id: string; projectId: string } }
 
 export interface SyncMessage {
   seq: number

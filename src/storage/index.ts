@@ -17,30 +17,37 @@ export interface Storage {
   listProjects(): Promise<Project[]>
   createProject(p: Project): Promise<void>
   updateProject(p: Partial<Project> & { id: string }): Promise<void>
-  deleteProject(id: string): Promise<void>
+  deleteProject(id: string): Promise<void>       // soft delete
+  restoreProject(id: string): Promise<void>
+  purgeProject(id: string): Promise<void>         // hard delete
 
   // Blocks
   getBlock(id: string): Promise<Block | null>
   getBlocks(projectId: string): Promise<Block[]>
   createBlock(b: Block): Promise<void>
   updateBlock(b: Partial<Block> & { id: string; projectId: string }): Promise<void>
-  deleteBlock(id: string, projectId: string): Promise<void>
+  deleteBlock(id: string, projectId: string): Promise<void>  // soft delete
+  restoreBlock(id: string, projectId: string): Promise<void>
+  purgeBlock(id: string, projectId: string): Promise<void>    // hard delete
 
   // Edges
   getEdges(projectId: string): Promise<Edge[]>
   createEdge(e: Edge): Promise<void>
-  deleteEdge(sourceBlockId: string, targetBlockId: string): Promise<void>
+  deleteEdge(sourceBlockId: string, targetBlockId: string): Promise<void>  // soft delete
+  restoreEdge(sourceBlockId: string, targetBlockId: string): Promise<void>
 
   // Subtasks
   getSubTasks(blockId: string): Promise<SubTask[]>
   createSubTask(st: SubTask): Promise<void>
   updateSubTask(st: Partial<SubTask> & { id: string; blockId: string }): Promise<void>
-  deleteSubTask(id: string, blockId: string): Promise<void>
+  deleteSubTask(id: string, blockId: string): Promise<void>  // soft delete
+  restoreSubTask(id: string, blockId: string): Promise<void>
 
   // Ghost notes
   getGhostNotes(projectId: string): Promise<GhostNote[]>
   createGhostNote(gn: GhostNote): Promise<void>
-  deleteGhostNote(id: string, projectId: string): Promise<void>
+  deleteGhostNote(id: string, projectId: string): Promise<void>  // soft delete
+  restoreGhostNote(id: string, projectId: string): Promise<void>
 
   // Snapshot
   getSnapshot(projectId: string): Promise<SyncSnapshot>
